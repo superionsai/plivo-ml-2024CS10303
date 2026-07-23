@@ -1,6 +1,6 @@
 # RUNLOG — Complete Experiment Record
 
-All numbers are from actual runs on this machine (Ubuntu/WSL2, Python 3.12, PyTorch CPU).
+All numbers are from actual runs on this environment.
 No results are pre-filled or assumed — every single number was measured.
 
 ---
