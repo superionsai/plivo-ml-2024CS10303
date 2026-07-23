@@ -37,10 +37,15 @@ if __name__ == "__main__":
     print(f"Done in {time.time()-t0:.1f}s")
     print(f"Compression on sample: {measure_compression(tok, sample):.3f} bytes/token")
 
-    # verify losslessness
-    encoded = tok.encode(sample)
+    # verify losslessness on a diverse sample covering all unique chars
+    # (use first 200k chars which includes all unique character types in corpus)
+    check_sample = text[:200_000]
+    encoded = tok.encode(check_sample)
     decoded = tok.decode(encoded)
-    assert decoded == sample, "tokenizer is not lossless!"
+    assert decoded == check_sample, (
+        f"tokenizer is not lossless! "
+        f"First mismatch at char {next(i for i,(a,b) in enumerate(zip(decoded,check_sample)) if a!=b)}"
+    )
     print("Lossless check: PASS")
 
     tok.save(args.out)

@@ -1,5 +1,6 @@
+from __future__ import annotations
 """
-Tokenizer: Byte-Pair Encoding with Devanagari-aware pre-tokenization.
+Tokenizer: fast Byte-Pair Encoding with Devanagari-aware pre-tokenization.
 
 The baseline byte tokenizer treats every UTF-8 byte as a separate token.
 For Devanagari (Hindi), each character is 3 bytes -> 3 tokens, which means:
@@ -10,9 +11,12 @@ This BPE tokenizer merges frequent byte-pairs, trained on the provided corpus.
 Devanagari characters (U+0900-U+097F) are pre-tokenized as whole units so that
 consonant+matra combinations can be merged correctly (not split mid-character).
 
+Training uses incremental pair-count updates (only words containing the merged
+pair are rescanned per step) — significantly faster than full-corpus rescans.
+
 Guarantees (checked by evaluate.py):
   1. decode(encode(text)) == text  (lossless, byte fallback for unseen bytes)
-  2. load() returns an object with .encode(), .decode(), .vocab_size
+  2. load() returns object with .encode(), .decode(), .vocab_size
   3. tokenizer.json is loaded relative to this file (works from any cwd)
 """
 
@@ -21,134 +25,161 @@ import os
 import re
 from collections import defaultdict
 
-# Pre-tokenization regex: treat Devanagari blocks as atomic units,
-# then split on whitespace-like boundaries for English words.
-# This ensures Hindi consonant+matra pairs get a chance to merge.
-_PRETOK = re.compile(
-    r'[\u0900-\u097F]+|[a-zA-Z]+|\d+|[^\s\w]|\s+',
-    re.UNICODE
-)
-
-_TOKENIZER_FILE = os.path.join(os.path.dirname(__file__), "tokenizer.json")
+# The catch-all `.` at the end ensures NO character is ever dropped,
+# which is required for the lossless guarantee. Without it, Unicode word
+# characters outside ASCII and Devanagari (e.g. accented Latin) would be silently skipped.
+_PRETOK = re.compile(r'[\u0900-\u097F]+|[a-zA-Z]+|\d+|\s+|.', re.UNICODE | re.DOTALL)
+_TOKENIZER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tokenizer.json")
 
 
 class BPETokenizer:
-    """Byte-level BPE with lossless fallback."""
+    """Byte-level BPE with lossless byte fallback."""
 
     def __init__(self, merges: list[tuple[int, int]], vocab_size: int):
-        # merges: ordered list of (a, b) -> a+b pairs applied during encode
         self.merges = {(a, b): i + 256 for i, (a, b) in enumerate(merges)}
         self.vocab_size = vocab_size
-        # build decode table: id -> bytes
-        self._id2bytes = {i: bytes([i]) for i in range(256)}
+        self._id2bytes: dict[int, bytes] = {i: bytes([i]) for i in range(256)}
         for (a, b), idx in self.merges.items():
             self._id2bytes[idx] = self._id2bytes[a] + self._id2bytes[b]
 
-    def _tokenize_word(self, word_bytes: bytes) -> list[int]:
-        """Apply BPE merges to a single pre-tokenized word's bytes."""
-        ids = list(word_bytes)
+    def _apply_merges(self, ids: list[int]) -> list[int]:
         while len(ids) >= 2:
-            # find the highest-priority (earliest) merge available
-            best = None
-            best_rank = float('inf')
+            best_rank, best_i = float('inf'), -1
             for i in range(len(ids) - 1):
-                pair = (ids[i], ids[i + 1])
-                if pair in self.merges and self.merges[pair] < best_rank:
-                    best = i
-                    best_rank = self.merges[pair]
-            if best is None:
+                r = self.merges.get((ids[i], ids[i+1]), float('inf'))
+                if r < best_rank:
+                    best_rank, best_i = r, i
+            if best_i == -1:
                 break
-            new_id = self.merges[(ids[best], ids[best + 1])]
-            ids = ids[:best] + [new_id] + ids[best + 2:]
+            ids = ids[:best_i] + [self.merges[(ids[best_i], ids[best_i+1])]] + ids[best_i+2:]
         return ids
 
     def encode(self, text: str) -> list[int]:
         ids = []
         for chunk in _PRETOK.findall(text):
-            ids.extend(self._tokenize_word(chunk.encode('utf-8')))
+            ids.extend(self._apply_merges(list(chunk.encode('utf-8'))))
         return ids
 
     def decode(self, ids: list[int]) -> str:
-        raw = b''.join(self._id2bytes.get(i, b'') for i in ids)
-        return raw.decode('utf-8', errors='replace')
+        return b''.join(self._id2bytes.get(i, b'') for i in ids).decode('utf-8', errors='replace')
 
     def save(self, path: str):
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump({"type": "bpe", "merges": self.merges_as_list(),
-                       "vocab_size": self.vocab_size}, f)
-
-    def merges_as_list(self) -> list[list[int]]:
         inv = {v: k for k, v in self.merges.items()}
-        return [list(inv[i + 256]) for i in range(len(self.merges))]
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump({"type": "bpe",
+                       "merges": [list(inv[256 + i]) for i in range(len(self.merges))],
+                       "vocab_size": self.vocab_size}, f)
 
 
 def train_bpe(text: str, num_merges: int, verbose: bool = True) -> BPETokenizer:
-    """Train BPE on text. num_merges = vocab_size - 256."""
-    # pre-tokenize into words, convert each to list of byte-ids
-    words = [list(chunk.encode('utf-8')) for chunk in _PRETOK.findall(text)]
-    # count word frequencies
-    word_freq: dict[tuple, int] = defaultdict(int)
-    for w in words:
-        word_freq[tuple(w)] += 1
+    """
+    Train BPE. Uses per-word scanning only for words that contain the merged
+    pair at each step — much faster than full-corpus rescan.
 
-    merges = []
-    vocab = {tuple(w): freq for w, freq in word_freq.items()}
+    Strategy:
+      - word_ids[i]: current token list for word i
+      - pair_to_words[pair]: set of word indices containing that pair
+      - pair_count[pair]: total frequency of that pair across all words
+    """
+    import time
+    t0 = time.time()
+
+    # Pre-tokenize: build (word_bytes, freq) table
+    word_freq: dict[bytes, int] = defaultdict(int)
+    for chunk in _PRETOK.findall(text):
+        word_freq[chunk.encode('utf-8')] += 1
+
+    # Convert to indexed structure
+    words_bytes = list(word_freq.keys())
+    words_freq  = [word_freq[w] for w in words_bytes]
+    word_ids    = [list(w) for w in words_bytes]  # mutable token lists
+    n_words     = len(word_ids)
+
+    # Build pair_count and pair_to_words index
+    pair_count: dict[tuple, int] = defaultdict(int)
+    pair_to_words: dict[tuple, set] = defaultdict(set)
+
+    for wi, (ids, freq) in enumerate(zip(word_ids, words_freq)):
+        for j in range(len(ids) - 1):
+            p = (ids[j], ids[j+1])
+            pair_count[p] += freq
+            pair_to_words[p].add(wi)
+
+    merges: list[tuple[int, int]] = []
 
     for step in range(num_merges):
-        # count pair frequencies across all words
-        pair_counts: dict[tuple, int] = defaultdict(int)
-        for word, freq in vocab.items():
-            for a, b in zip(word, word[1:]):
-                pair_counts[(a, b)] += freq
-        if not pair_counts:
+        if not pair_count:
             break
-        best_pair = max(pair_counts, key=lambda p: pair_counts[p])
+        # Find best pair (max frequency)
+        best_pair = max(pair_count, key=lambda p: pair_count[p])
+        if pair_count[best_pair] <= 0:
+            break
+
         new_id = 256 + step
         merges.append(best_pair)
-        # merge best_pair in all words
-        new_vocab: dict[tuple, int] = {}
-        for word, freq in vocab.items():
-            new_word = []
+        a, b = best_pair
+
+        # Only rescan words that contain this pair
+        affected = list(pair_to_words.get(best_pair, set()))
+        for wi in affected:
+            ids  = word_ids[wi]
+            freq = words_freq[wi]
+            new_ids: list[int] = []
             i = 0
-            while i < len(word):
-                if i + 1 < len(word) and (word[i], word[i+1]) == best_pair:
-                    new_word.append(new_id)
+            while i < len(ids):
+                if i + 1 < len(ids) and ids[i] == a and ids[i+1] == b:
+                    # Remove adjacency pairs being destroyed
+                    if new_ids:
+                        old_l = (new_ids[-1], a)
+                        pair_count[old_l] -= freq
+                        pair_to_words[old_l].discard(wi)
+                    if i + 2 < len(ids):
+                        old_r = (b, ids[i+2])
+                        pair_count[old_r] -= freq
+                        pair_to_words[old_r].discard(wi)
+                    # Add new adjacency pairs being created
+                    if new_ids:
+                        new_l = (new_ids[-1], new_id)
+                        pair_count[new_l] += freq
+                        pair_to_words[new_l].add(wi)
+                    if i + 2 < len(ids):
+                        new_r = (new_id, ids[i+2])
+                        pair_count[new_r] += freq
+                        pair_to_words[new_r].add(wi)
+                    new_ids.append(new_id)
                     i += 2
                 else:
-                    new_word.append(word[i])
+                    new_ids.append(ids[i])
                     i += 1
-            new_vocab[tuple(new_word)] = freq
-        vocab = new_vocab
-        if verbose and (step + 1) % 256 == 0:
-            print(f"  BPE merge {step+1}/{num_merges}: {best_pair} -> {new_id} "
-                  f"(freq={pair_counts[best_pair]})")
+            word_ids[wi] = new_ids
+
+        # Remove the merged pair from tracking
+        del pair_count[best_pair]
+        del pair_to_words[best_pair]
+
+        if verbose and (step + 1) % 512 == 0:
+            el = time.time() - t0
+            print(f"  BPE merge {step+1}/{num_merges}  "
+                  f"({el:.1f}s, {el/(step+1)*1000:.0f}ms/merge)")
 
     return BPETokenizer(merges, vocab_size=256 + len(merges))
 
 
-def load(path: str = None) -> BPETokenizer | 'ByteTokenizer':
-    """Load tokenizer from tokenizer.json, falling back to byte tokenizer."""
+def load(path: str = None):
+    """Load BPE tokenizer from tokenizer.json, falling back to byte tokenizer."""
     p = path or _TOKENIZER_FILE
     if not os.path.exists(p):
-        # fallback: byte tokenizer (used before train_tokenizer.py is run)
         return _ByteFallback()
     with open(p, encoding='utf-8') as f:
         data = json.load(f)
     if data.get('type') == 'bpe':
-        tok = BPETokenizer(
-            merges=[(a, b) for a, b in data['merges']],
-            vocab_size=data['vocab_size']
-        )
-        return tok
+        return BPETokenizer(merges=[(a, b) for a, b in data['merges']],
+                            vocab_size=data['vocab_size'])
     return _ByteFallback()
 
 
 class _ByteFallback:
-    """Raw byte tokenizer — used when no tokenizer.json exists."""
+    """Raw byte tokenizer — fallback when no tokenizer.json is present."""
     vocab_size = 256
-
-    def encode(self, text: str) -> list[int]:
-        return list(text.encode('utf-8'))
-
-    def decode(self, ids: list[int]) -> str:
-        return bytes(ids).decode('utf-8', errors='replace')
+    def encode(self, text: str) -> list[int]: return list(text.encode('utf-8'))
+    def decode(self, ids: list[int]) -> str: return bytes(ids).decode('utf-8', errors='replace')

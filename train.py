@@ -65,7 +65,8 @@ def main():
     ap.add_argument("--n_head",     type=int,   default=8)
     ap.add_argument("--block_size", type=int,   default=384)
     ap.add_argument("--pos_enc",    default="rope", choices=["rope", "learned"])
-    ap.add_argument("--tie_weights",action="store_true", default=True)
+    ap.add_argument("--no_tie",     action="store_true", default=False,
+                    help="disable weight tying (default: tying ON)")
 
     # optimiser
     ap.add_argument("--optimizer",  default="muon", choices=["adamw", "muon"])
@@ -84,8 +85,8 @@ def main():
                     help="WSD: step where decay begins (ignored for cosine)")
 
     # EMA
-    ap.add_argument("--ema",        action="store_true", default=True,
-                    help="EMA weight averaging for the saved checkpoint")
+    ap.add_argument("--ema",        action="store_true", default=False,
+                    help="EMA weight averaging for the saved checkpoint (recommended)")
     ap.add_argument("--ema_decay",  type=float, default=0.995)
     ap.add_argument("--ema_start",  type=int,   default=1500,
                     help="step from which EMA accumulation starts")
@@ -111,7 +112,7 @@ def main():
     cfg.n_head      = args.n_head
     cfg.n_embd      = args.n_embd
     cfg.pos_enc     = args.pos_enc
-    cfg.tie_weights = args.tie_weights
+    cfg.tie_weights = not args.no_tie
 
     model = GPT(cfg).to(device)
     n = model.n_params()

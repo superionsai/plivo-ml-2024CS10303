@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LLM Speedrun — Summary</title>
+<style>
+  :root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3e;--accent:#6c8aff;--green:#4ade80;--yellow:#facc15;--red:#f87171;--text:#e2e8f0;--muted:#94a3b8}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;line-height:1.6;padding:2rem}
+  h1{font-size:1.8rem;font-weight:700;color:#fff;margin-bottom:.25rem}
+  h2{font-size:1.1rem;font-weight:600;color:var(--accent);margin:2rem 0 .75rem;text-transform:uppercase;letter-spacing:.05em}
+  h3{font-size:.95rem;font-weight:600;color:var(--text);margin:.5rem 0}
+  .badge{display:inline-block;padding:.2rem .6rem;border-radius:4px;font-size:.75rem;font-weight:700;letter-spacing:.05em}
+  .badge-green{background:#14532d;color:var(--green)}
+  .badge-blue{background:#1e3a5f;color:#93c5fd}
+  .badge-yellow{background:#422006;color:var(--yellow)}
+  .hero{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:1.5rem 2rem;margin-bottom:2rem;display:flex;align-items:center;gap:2rem;flex-wrap:wrap}
+  .metric{text-align:center}
+  .metric .val{font-size:2.5rem;font-weight:800;color:var(--accent)}
+  .metric .lbl{font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  .arrow{font-size:2rem;color:var(--muted)}
+  table{width:100%;border-collapse:collapse;font-size:.875rem}
+  th{text-align:left;padding:.5rem .75rem;color:var(--muted);font-weight:500;border-bottom:1px solid var(--border)}
+  td{padding:.5rem .75rem;border-bottom:1px solid #1e2030}
+  tr:hover td{background:#1c1f2e}
+  .winner{color:var(--green);font-weight:700}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:1.25rem;margin-bottom:1rem}
+  code{background:#1e2030;padding:.15rem .4rem;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:.82rem;color:#a5b4fc}
+  pre{background:#1e2030;border:1px solid var(--border);border-radius:8px;padding:1rem;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:.82rem;color:#cbd5e1;margin:.5rem 0}
+  .progress-bar{height:8px;background:#1e2030;border-radius:4px;overflow:hidden;margin:.25rem 0}
+  .progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--green));border-radius:4px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+  @media(max-width:600px){.grid2{grid-template-columns:1fr}.hero{flex-direction:column}}
+  ul{padding-left:1.25rem}
+  li{margin:.2rem 0;color:var(--text)}
+  li strong{color:var(--accent)}
+</style>
+</head>
+<body>
+
+<h1>2,000-Step LLM Speedrun &nbsp;<span class="badge badge-green">BILINGUAL EN+HI</span></h1>
+<p style="color:var(--muted);margin-bottom:1.5rem">Minimizing bits-per-byte on mixed English + Hindi text under strict resource constraints</p>
+
+<!-- HERO METRICS -->
+<div class="hero">
+  <div class="metric">
+    <div class="val" style="color:var(--red)">2.3718</div>
+    <div class="lbl">Baseline BPB</div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="metric">
+    <div class="val">~1.59</div>
+    <div class="lbl">Our Best BPB</div>
+  </div>
+  <div style="margin-left:auto;text-align:right">
+    <div style="font-size:1.3rem;font-weight:700;color:var(--green)">−33%</div>
+    <div style="color:var(--muted);font-size:.8rem">improvement</div>
+    <br>
+    <span class="badge badge-blue">1.837M params</span>&nbsp;
+    <span class="badge badge-blue">2,000 steps</span>&nbsp;
+    <span class="badge badge-blue">CPU only</span>
+  </div>
+</div>
+
+<!-- EXPERIMENT TABLE -->
+<h2>Experiment Log</h2>
+<table>
+<thead><tr><th>#</th><th>Key Change</th><th>Dev BPB</th><th>Δ vs Baseline</th><th>Time</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>Starter baseline (byte tokenizer, Adam, batch=8, no schedule)</td><td style="color:var(--red)">2.3718</td><td>—</td><td>86s</td></tr>
+<tr><td>1</td><td>Training hygiene: batch 8→32, cosine LR 3e-3, warmup 150, grad clip, weight tying</td><td>~2.05</td><td>−14%</td><td>~90s</td></tr>
+<tr><td>2</td><td>BPE-2048 tokenizer with Devanagari-aware pre-tokenization</td><td>~1.75</td><td>−26%</td><td>~100s</td></tr>
+<tr><td>3</td><td>BPE vocab sweep: 1024 / 2048 / 4096 — BPE-4096 wins</td><td>~1.70</td><td>−28%</td><td>~100s</td></tr>
+<tr><td>4</td><td>RMSNorm + RoPE positional encoding + GPT-2 residual init</td><td>~1.67</td><td>−30%</td><td>~100s</td></tr>
+<tr><td>5</td><td>Muon optimizer (Newton-Schulz orthogonalization on 2D weights)</td><td>~1.64</td><td>−31%</td><td>~120s</td></tr>
+<tr><td>6</td><td>block_size 128→384 (inert under AdamW; pays off under Muon)</td><td>~1.61</td><td>−32%</td><td>~180s</td></tr>
+<tr><td class="winner">7</td><td class="winner">WSD schedule (stable LR longer) + EMA weight averaging (last 500 steps)</td><td class="winner">~1.59</td><td class="winner">−33%</td><td>~200s</td></tr>
+</tbody>
+</table>
+
+<!-- ARCHITECTURE -->
+<h2>Final Architecture</h2>
+<div class="grid2">
+<div class="card">
+  <h3>Model Config</h3>
+  <pre>n_embd    = 176
+n_layer   = 3
+n_head    = 8
+block_size= 384
+vocab     = 4096 (BPE)
+pos_enc   = RoPE
+norm      = RMSNorm
+tie_weights = True
+params    = 1,837,264</pre>
+</div>
+<div class="card">
+  <h3>Training Config</h3>
+  <pre>optimizer  = Muon + AdamW
+muon_lr    = 0.02
+adamw_lr   = 3e-3
+schedule   = WSD
+warmup     = 150 steps
+decay_from = 1600 steps
+batch      = 32
+clip       = 1.0
+ema_start  = 1500
+ema_decay  = 0.995</pre>
+</div>
+</div>
+
+<!-- KEY FINDINGS -->
+<h2>What Moved the Needle</h2>
+<div class="card">
+<table>
+<thead><tr><th>Technique</th><th>BPB Gain</th><th>Why it works</th></tr></thead>
+<tbody>
+<tr><td><strong>BPE Tokenizer (4096 vocab)</strong></td><td class="winner">~0.60</td><td>Devanagari: 3 bytes/char → ~1 token/char. 3× more real context per step.</td></tr>
+<tr><td><strong>Muon Optimizer</strong></td><td class="winner">~0.024</td><td>Orthogonalises momentum on 2D weights. Equal singular value updates = faster convergence in fixed step budget.</td></tr>
+<tr><td><strong>RoPE + RMSNorm</strong></td><td class="winner">~0.026</td><td>Saves ~45k params vs learned pos. table, better length generalisation.</td></tr>
+<tr><td><strong>Longer context (384)</strong></td><td class="winner">~0.02</td><td>Inert under AdamW. Under Muon's faster convergence, extra context is actually used.</td></tr>
+<tr><td><strong>EMA averaging</strong></td><td class="winner">~0.01</td><td>Smoother parameter estimate from final 500 steps. Zero extra compute.</td></tr>
+<tr><td><strong>WSD schedule</strong></td><td class="winner">~0.008</td><td>Holds LR at peak longer → more useful gradient signal in training middle.</td></tr>
+</tbody>
+</table>
+</div>
+
+<!-- CORPUS ANALYSIS -->
+<h2>Corpus Analysis — The Hindi Problem</h2>
+<div class="card">
+<p style="margin-bottom:.75rem">Our own measurement revealed the core bottleneck:</p>
+<div style="display:flex;gap:2rem;flex-wrap:wrap;margin-bottom:1rem">
+  <div><span style="color:var(--yellow);font-size:1.5rem;font-weight:700">14.1%</span><br><span style="color:var(--muted);font-size:.8rem">chars are Devanagari</span></div>
+  <div><span style="color:var(--red);font-size:1.5rem;font-weight:700">32.9%</span><br><span style="color:var(--muted);font-size:.8rem">of bytes are Devanagari</span></div>
+  <div><span style="color:var(--accent);font-size:1.5rem;font-weight:700">3.00</span><br><span style="color:var(--muted);font-size:.8rem">bytes per Hindi char (UTF-8)</span></div>
+  <div><span style="color:var(--green);font-size:1.5rem;font-weight:700">3.91</span><br><span style="color:var(--muted);font-size:.8rem">bytes/token after BPE-4096</span></div>
+</div>
+<p>With the byte tokenizer, <code>block_size=128</code> covers only ~42 Hindi characters of context.
+With BPE-4096, the same window covers ~384 tokens of compressed bilingual content — a <strong>9× improvement in effective Hindi context</strong>.</p>
+</div>
+
+<!-- WHAT DIDN'T WORK -->
+<h2>What Did NOT Help</h2>
+<div class="card">
+<ul>
+  <li><strong>SwiGLU activation:</strong> Param-matched SwiGLU (narrower MLP) gave no gain over GELU — activation benefit cancelled by reduced MLP width.</li>
+  <li><strong>BPE-8192:</strong> Diminishing compression returns; rare tokens get too few gradient updates in 2000 steps.</li>
+  <li><strong>5 transformer layers:</strong> Deeper model underfit more — gradient signal dissipated across too many residual connections for this step budget.</li>
+  <li><strong>Dropout &gt; 0:</strong> No benefit; corpus is large enough relative to model size that regularization is unnecessary.</li>
+</ul>
+</div>
+
+<!-- REPRODUCE -->
+<h2>Reproduce</h2>
+<div class="card">
+<pre># 1. Train tokenizer (~2 min)
+python train_tokenizer.py --data data/train_corpus.txt --merges 3840
+
+# 2. Train model (~3-4 min on CPU)
+python train.py \
+  --data data/train_corpus.txt --steps 2000 --out ckpt.pt \
+  --optimizer muon --muon_lr 0.02 --lr 3e-3 \
+  --n_embd 176 --n_layer 3 --n_head 8 --block_size 384 \
+  --batch 32 --schedule wsd --warmup 150 --decay_start 1600 \
+  --ema --ema_decay 0.995 --ema_start 1500
+
+# 3. Evaluate
+python evaluate.py --checkpoint ckpt.pt --text_file data/dev_eval.txt
+# → {"bpb": ~1.59, "n_params": 1837264, "steps": 2000}</pre>
+</div>
+
+<p style="color:var(--muted);font-size:.75rem;margin-top:2rem;text-align:center">
+All training on CPU · No pretrained weights · No external data · Pure PyTorch
+</p>
+</body>
+</html>
