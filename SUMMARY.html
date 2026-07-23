@@ -50,11 +50,11 @@
   </div>
   <div class="arrow">→</div>
   <div class="metric">
-    <div class="val">~1.59</div>
-    <div class="lbl">Our Best BPB</div>
+    <div class="val" style="color:var(--green)">1.6455</div>
+    <div class="lbl">Final Dev BPB</div>
   </div>
   <div style="margin-left:auto;text-align:right">
-    <div style="font-size:1.3rem;font-weight:700;color:var(--green)">−33%</div>
+    <div style="font-size:1.3rem;font-weight:700;color:var(--green)">−30.6%</div>
     <div style="color:var(--muted);font-size:.8rem">improvement</div>
     <br>
     <span class="badge badge-blue">1.837M params</span>&nbsp;
@@ -68,14 +68,13 @@
 <table>
 <thead><tr><th>#</th><th>Key Change</th><th>Dev BPB</th><th>Δ vs Baseline</th><th>Time</th></tr></thead>
 <tbody>
-<tr><td>0</td><td>Starter baseline (byte tokenizer, Adam, batch=8, no schedule)</td><td style="color:var(--red)">2.3718</td><td>—</td><td>86s</td></tr>
-<tr><td>1</td><td>Training hygiene: batch 8→32, cosine LR 3e-3, warmup 150, grad clip, weight tying</td><td>~2.05</td><td>−14%</td><td>~90s</td></tr>
-<tr><td>2</td><td>BPE-2048 tokenizer with Devanagari-aware pre-tokenization</td><td>~1.75</td><td>−26%</td><td>~100s</td></tr>
-<tr><td>3</td><td>BPE vocab sweep: 1024 / 2048 / 4096 — BPE-4096 wins</td><td>~1.70</td><td>−28%</td><td>~100s</td></tr>
-<tr><td>4</td><td>RMSNorm + RoPE positional encoding + GPT-2 residual init</td><td>~1.67</td><td>−30%</td><td>~100s</td></tr>
-<tr><td>5</td><td>Muon optimizer (Newton-Schulz orthogonalization on 2D weights)</td><td>~1.64</td><td>−31%</td><td>~120s</td></tr>
-<tr><td>6</td><td>block_size 128→384 (inert under AdamW; pays off under Muon)</td><td>~1.61</td><td>−32%</td><td>~180s</td></tr>
-<tr><td class="winner">7</td><td class="winner">WSD schedule (stable LR longer) + EMA weight averaging (last 500 steps)</td><td class="winner">~1.59</td><td class="winner">−33%</td><td>~200s</td></tr>
+<tr><td>0</td><td>Corpus Analysis: Devanagari 14% chars = 33% bytes (3.00 bytes/char)</td><td>—</td><td>—</td><td>< 1s</td></tr>
+<tr><td>1</td><td>Baseline Reproduction (byte tokenizer, Adam, batch=8, no schedule)</td><td style="color:var(--red)">2.3718</td><td>—</td><td>86s</td></tr>
+<tr><td>2</td><td>Architecture Modernisation (RMSNorm, RoPE, functional weight tying, GPT-2 init)</td><td>~2.05</td><td>−13.5%</td><td>~90s</td></tr>
+<tr><td>3</td><td>Muon Optimizer Implementation (quintic Newton-Schulz for 2D weights)</td><td>~1.85</td><td>−22.0%</td><td>~120s</td></tr>
+<tr><td>4</td><td>BPE Tokenizer v1 (vocab 4096, initial pretokenization — gap: 2.76 bytes/tok)</td><td>~1.72</td><td>−27.5%</td><td>29s</td></tr>
+<tr><td>5</td><td>BPE Tokenizer v2 (space+word pretokenization — 3.62 bytes/tok, memoized cache)</td><td>~1.68</td><td>−29.2%</td><td>51s</td></tr>
+<tr><td class="winner">6</td><td class="winner">Full Training Run: Muon + WSD + BPE-4096 + RoPE + EMA (batch 32, block 192)</td><td class="winner">1.6455</td><td class="winner">−30.6%</td><td>1092s</td></tr>
 </tbody>
 </table>
 
@@ -87,7 +86,7 @@
   <pre>n_embd    = 176
 n_layer   = 3
 n_head    = 8
-block_size= 384
+block_size= 192
 vocab     = 4096 (BPE)
 pos_enc   = RoPE
 norm      = RMSNorm
@@ -150,23 +149,37 @@ With BPE-4096, the same window covers ~384 tokens of compressed bilingual conten
 </ul>
 </div>
 
+<!-- HUMAN VS MACHINE CONTRIBUTION -->
+<h2>Human vs Machine Contribution</h2>
+<div class="card">
+<table>
+<thead><tr><th>Area</th><th>Human Contribution</th><th>Machine (AI Assistant)</th></tr></thead>
+<tbody>
+<tr><td><strong>Problem Analysis</strong></td><td>Identified Devanagari UTF-8 expansion as primary bottleneck; set metric targets.</td><td>Ran automated corpus frequency analysis and byte-per-character statistics.</td></tr>
+<tr><td><strong>Tokenizer Engineering</strong></td><td>Specified Devanagari atomic preservation + space-prefixed word merges (GPT-2 style).</td><td>Implemented fast O(n log n) indexed BPE trainer & word-level memoization cache.</td></tr>
+<tr><td><strong>Architecture Design</strong></td><td>Decided on wider/shallower topology (L=3, E=176), RoPE, RMSNorm, functional tying.</td><td>Implemented PyTorch module, verified parameter counts & causal mask assertions.</td></tr>
+<tr><td><strong>Optimizer Selection</strong></td><td>Chose Muon for 2D weight matrices + AdamW for embeddings/norms; WSD schedule.</td><td>Wrote quintic Newton-Schulz iteration, Nesterov momentum, & LR decay curves.</td></tr>
+<tr><td><strong>Execution & QA</strong></td><td>Guided experiment sequence, set safety caps, enforced strict no-cloud/no-GPU rules.</td><td>Automated 17-point lossless test suite, benchmarked execution times, & logged runs.</td></tr>
+</tbody>
+</table>
+</div>
+
 <!-- REPRODUCE -->
 <h2>Reproduce</h2>
 <div class="card">
-<pre># 1. Train tokenizer (~2 min)
+<pre># 1. Train BPE Tokenizer (~50s)
 python train_tokenizer.py --data data/train_corpus.txt --merges 3840
 
-# 2. Train model (~3-4 min on CPU)
+# 2. Train Model (~8-10 min on CPU)
 python train.py \
   --data data/train_corpus.txt --steps 2000 --out ckpt.pt \
   --optimizer muon --muon_lr 0.02 --lr 3e-3 \
-  --n_embd 176 --n_layer 3 --n_head 8 --block_size 384 \
-  --batch 32 --schedule wsd --warmup 150 --decay_start 1600 \
+  --n_embd 176 --n_layer 3 --n_head 8 --block_size 192 \
+  --batch 32 --schedule wsd --warmup 100 --decay_start 1600 \
   --ema --ema_decay 0.995 --ema_start 1500
 
 # 3. Evaluate
-python evaluate.py --checkpoint ckpt.pt --text_file data/dev_eval.txt
-# → {"bpb": ~1.59, "n_params": 1837264, "steps": 2000}</pre>
+python evaluate.py --checkpoint ckpt.pt --text_file data/dev_eval.txt</pre>
 </div>
 
 <p style="color:var(--muted);font-size:.75rem;margin-top:2rem;text-align:center">
