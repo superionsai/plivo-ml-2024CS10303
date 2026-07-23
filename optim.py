@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Momentum Orthogonalised by Newton-Schulz (Muon) optimizer.
 

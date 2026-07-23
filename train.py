@@ -12,10 +12,10 @@ Usage examples:
   python train.py --data data/train_corpus.txt --steps 2000 --out ckpt.pt
 
   # full run with best config:
-  python train.py --data data/train_corpus.txt --steps 2000 --out ckpt.pt \\
-      --optimizer muon --muon_lr 0.02 --lr 3e-3 \\
-      --n_embd 176 --n_layer 3 --n_head 8 --block_size 384 \\
-      --batch 32 --schedule wsd --warmup 150 --decay_start 1600 \\
+  python train.py --data data/train_corpus.txt --steps 2000 --out ckpt.pt \
+      --optimizer muon --muon_lr 0.02 --lr 3e-3 \
+      --n_embd 176 --n_layer 3 --n_head 8 --block_size 192 \
+      --batch 32 --schedule wsd --warmup 100 --decay_start 1600 \
       --ema --ema_decay 0.995 --ema_start 1500
 
 Flags:
