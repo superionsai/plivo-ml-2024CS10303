@@ -25,10 +25,10 @@ import os
 import re
 from collections import defaultdict
 
-# The catch-all `.` at the end ensures NO character is ever dropped,
-# which is required for the lossless guarantee. Without it, Unicode word
-# characters outside ASCII and Devanagari (e.g. accented Latin) would be silently skipped.
-_PRETOK = re.compile(r'[\u0900-\u097F]+|[a-zA-Z]+|\d+|\s+|.', re.UNICODE | re.DOTALL)
+# Allow space+word merges: ` ?[a-zA-Z]+` lets the leading space join the word,
+# enabling BPE to learn tokens like ' the', ' and', ' is' — the single biggest
+# compression improvement. Devanagari stays atomic for correct conjunct merging.
+_PRETOK = re.compile(r'[\u0900-\u097F]+| ?[a-zA-Z]+| ?\d+|\s+|.', re.UNICODE | re.DOTALL)
 _TOKENIZER_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tokenizer.json")
 
 
@@ -41,8 +41,10 @@ class BPETokenizer:
         self._id2bytes: dict[int, bytes] = {i: bytes([i]) for i in range(256)}
         for (a, b), idx in self.merges.items():
             self._id2bytes[idx] = self._id2bytes[a] + self._id2bytes[b]
+        self._encode_cache: dict[str, list[int]] = {}  # word→token-ids cache
 
     def _apply_merges(self, ids: list[int]) -> list[int]:
+        """Apply all BPE merges greedily. O(n^2) per call but cached at word level."""
         while len(ids) >= 2:
             best_rank, best_i = float('inf'), -1
             for i in range(len(ids) - 1):
@@ -56,8 +58,14 @@ class BPETokenizer:
 
     def encode(self, text: str) -> list[int]:
         ids = []
+        cache = self._encode_cache
         for chunk in _PRETOK.findall(text):
-            ids.extend(self._apply_merges(list(chunk.encode('utf-8'))))
+            if chunk in cache:
+                ids.extend(cache[chunk])
+            else:
+                encoded = self._apply_merges(list(chunk.encode('utf-8')))
+                cache[chunk] = encoded
+                ids.extend(encoded)
         return ids
 
     def decode(self, ids: list[int]) -> str:
